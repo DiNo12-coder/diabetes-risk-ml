@@ -1,0 +1,123 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split,GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler,OneHotEncoder,OrdinalEncoder, label_binarize
+from sklearn.impute import KNNImputer, SimpleImputer
+from sklearn.metrics import accuracy_score,precision_score,recall_score,f1_score,precision_recall_curve,roc_auc_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+data = pd.read_csv("diabet.csv")
+def information():
+    print(data.head(5).to_string())
+    print(data.info())
+    print(data.describe())
+    print(data.isnull().sum()) # miss smoking status , alcohol_consumption, #income_brakcet
+
+list_onehot = ["gender", "city", "family_history_diabetes","diet_type"]
+list_number = [ "age", "hours_sleep_per_night", "bmi","stress_level",
+               "fasting_blood_sugar", "hba1c_level", "blood_pressure_systolic", "blood_pressure_diastolic",
+               "waist_circumference_cm"]
+list_ordinal = ["physical_activity_level", "smoking_status", "alcohol_consumption", "income_bracket"]
+x = data.drop(["diabetes_risk","patient_id"], axis = 1)
+y = data["diabetes_risk"]
+
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = 0.3,
+                                                    random_state = 36, stratify=y)
+
+numerical_pipeline = Pipeline([("scaler", StandardScaler()),
+                               ("imputer", KNNImputer(n_neighbors=10,missing_values=np.nan))])
+ordinal_pipeline = Pipeline([("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+                             ("ordinal", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))])
+onehot_pipeline = Pipeline([("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+                            ("onehot", OneHotEncoder(handle_unknown="ignore"))])
+preprocessor = ColumnTransformer([("numerical", numerical_pipeline, list_number),
+                                  ("ordinal", ordinal_pipeline, list_ordinal),
+                                  ("onehot", onehot_pipeline, list_onehot)])
+pipeline_knn = Pipeline([("preprocessor", preprocessor),
+                         ("knn", KNeighborsClassifier())])
+pipeline_logistic = Pipeline([("preprocessor", preprocessor),
+                              ("cls", LogisticRegression(max_iter=1000))])
+pipeline_random = Pipeline([("preprocessor", preprocessor),
+                            ("rf", RandomForestClassifier(random_state=36))])
+param_grid_knn = {
+    "preprocessor__numerical__imputer__n_neighbors": [3, 5, 10, 15],
+    "knn__n_neighbors": [3, 5, 7, 9, 11],
+    "knn__weights": ["uniform", "distance"],
+    "knn__metric": ["euclidean", "manhattan"]}
+param_grid_rf = {
+    "rf__n_estimators": [50, 100, 200],
+    "rf__max_depth": [None, 5, 10, 15],
+    "rf__min_samples_split": [2, 5, 10]}
+grid_knn = GridSearchCV(pipeline_knn, param_grid= param_grid_knn,cv = 5, scoring="accuracy",n_jobs=-1)
+grid_rf = GridSearchCV(pipeline_random, param_grid=param_grid_rf, cv = 5,scoring="accuracy",n_jobs=-1)
+
+grid_knn.fit(x_train, y_train)
+grid_rf.fit(x_train, y_train)
+pipeline_logistic.fit(x_train, y_train)
+#LOGISTIC REGRESSION
+prediction_logistic = pipeline_logistic.predict(x_test)
+prediction_logistic_proba = pipeline_logistic.predict_proba(x_test)
+#KNN
+prediction_knn = grid_knn.predict(x_test)
+prediction_knn_proba = grid_knn.predict_proba(x_test)
+#RANDOM FOREST
+prediction_rf = grid_rf.predict(x_test)
+prediction_rf_proba = grid_rf.predict_proba(x_test)
+
+def info_logis():
+    accuracy = accuracy_score(y_test, prediction_logistic)
+    recall = recall_score(y_test, prediction_logistic,average="weighted",zero_division=0)
+    f1 = f1_score(y_test, prediction_logistic,average="weighted",zero_division=0)
+    precision = precision_score(y_test, prediction_logistic,average="weighted",zero_division=0)
+    roc = roc_auc_score(y_test, prediction_logistic_proba,multi_class="ovr",average="weighted")
+    print("=============  LOGISTIC REGRESSION ==============")
+    print(f"Accuracy {accuracy} | Recall {recall} | F1 {f1} | Precision {precision} | ROC : {roc}")
+
+def info_rf():
+    accuracy = accuracy_score(y_test, prediction_rf)
+    recall = recall_score(y_test, prediction_rf,average="weighted",zero_division=0)
+    f1 = f1_score(y_test, prediction_rf,average="weighted",zero_division=0)
+    precision = precision_score(y_test, prediction_rf,average="weighted",zero_division=0)
+    roc = roc_auc_score(y_test, prediction_rf_proba,multi_class="ovr",average="weighted")
+    print("===========  RANDOM FOREST ============")
+    print(f"Accuracy : {accuracy} | Recall : {recall} | F1 : {f1} | Precision {precision} | Best_param : {grid_rf.best_params_} | ROC : {roc}")
+
+def info_knn():
+    accuracy = accuracy_score(y_test, prediction_knn)
+    recall = recall_score(y_test, prediction_knn,average="weighted",zero_division=0)
+    f1 = f1_score(y_test, prediction_knn,average="weighted",zero_division=0)
+    roc = roc_auc_score(y_test, prediction_knn_proba,multi_class="ovr",average="weighted")
+    precision = precision_score(y_test, prediction_knn,average="weighted",zero_division=0)
+    print("===============  KNN  ================")
+    print(f"Accuracy : {accuracy} | Recall : {recall} | F1 : {f1} | Precision {precision} | Best_param : {grid_knn.best_params_} | ROC :{roc}")
+classes = pipeline_logistic.classes_
+y_test_binary = label_binarize(y_test,classes=classes)
+def plot_prediction():
+    plt.figure(figsize=(10,7))
+    for i, class_name in enumerate(classes):
+        precision_log, recall_log, thresholds_log = precision_recall_curve(y_test_binary[:, i],prediction_logistic_proba[:, i])
+        plt.plot(recall_log,precision_log,label=f"Logistic - {class_name}")
+    for i, class_name in enumerate(classes):
+        precision_rf, recall_rf, thresholds_rf = precision_recall_curve(y_test_binary[:, i],prediction_rf_proba[:, i])
+        plt.plot(recall_rf, precision_rf,linestyle="--",label=f"Random Forest - {class_name}")
+    for i, class_name in enumerate(classes):
+        precision_knn, recall_knn, thresholds_knn = precision_recall_curve(y_test_binary[:, i],prediction_knn_proba[:, i])
+        plt.plot(recall_knn,precision_knn,linestyle=":",label=f"KNN - {class_name}")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Multiclass Precision-Recall Curve")
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
+info_logis()
+info_rf()
+info_knn()
+print(f"class order : {classes}")
+plot_prediction()
